@@ -7,9 +7,13 @@
   "scripts": {
     "broker": "docker compose up -d",
     "broker:stop": "docker compose down",
-    "start": "node simulator.js"
+    "start": "node simulator.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "mqtt": "^5.10.1"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
   }
 }

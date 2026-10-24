@@ -25,7 +25,7 @@ const mqtt = require("mqtt");
 
 const BROKER_URL = process.env.MQTT_URL || "mqtt://localhost:1883";
 const HTTP_PORT = Number(process.env.PORT || 8080);
-const T = "coolair/";
+const T = (process.env.MQTT_PREFIX || "coolair") + "/"; // tests use their own prefix
 
 // ---------------- scenarios: daily outdoor weather ----------------
 const SCENARIOS = {
@@ -44,7 +44,7 @@ const HOUSE = {
   windowUA: 0.12,       // kW per °C   extra exchange with the window open, fan off
   fanMaxFlow: 1800,     // m³/h at 100% fan
   fanMaxKw: 0.08,       // electric kW at 100% fan
-  acCoolKw: 4.0,        // kW of heat the AC removes
+  acCoolKw: 7.0,        // kW of heat the AC removes (a common "2-ton" home unit)
 };
 const AIR_KW_PER_M3H = 1.2 * 1.005 / 3600; // ρ·cp, kW per (m³/h · °C)
 
@@ -67,12 +67,14 @@ let setpoint = 24;
 let simMin = 0;            // minutes since start
 const overrides = { window: null, fan: null, ac: null }; // {mode, untilMin|null}
 
-let house, history, lastReason, lastChecks = null, lastHeat = null;
+let house, history, lastReason, lastChecks = null;
+let today = { outsideAirMin: 0, acMin: 0 }; // minutes since midnight (sim time) each way of cooling ran
 function resetSim() {
   simMin = 6 * 60;          // start at 06:00, just before the sun gets going
   const w = weatherAt(simMin);
   house = { tin: w.tout + 3, window: false, fan: 0, ac: false };
   history = [];
+  today = { outsideAirMin: 0, acMin: 0 };
   lastReason = "";
 }
 
@@ -148,6 +150,7 @@ function decide(w) {
   if (am === "on") ac = true;
   if (am === "off") ac = false;
   if (window && ac) reason += " (warning: AC running with window open)";
+  if (!window && fan > 0) reason += " (note: the fan is forced on but the window is shut, so it can't bring in outside air)";
 
   // the inputs behind the window decision, so the dashboard can explain it
   const checks = {
@@ -159,46 +162,54 @@ function decide(w) {
   return { window, fan, ac, reason, checks };
 }
 
-// ---------------- physics step (1 sim minute) ----------------
-function step() {
-  const w = weatherAt(simMin);
-  const d = decide(w);
+// ---------------- apply a decision (no time passes) ----------------
+// Called every sim minute, and straight after any command so the state reacts instantly, even when paused.
+function applyDecision() {
+  const d = decide(weatherAt(simMin));
   if (d.window !== house.window) event(d.window ? "Window OPENED" : "Window CLOSED");
   if ((d.fan > 0) !== (house.fan > 0)) event(d.fan > 0 ? "Fan ON" : "Fan OFF");
   if (d.ac !== house.ac) event(d.ac ? "AC ON" : "AC OFF");
-  const kind = (r) => r.replace(/[\d.]+/g, "#"); // ignore changing numbers when deciding to log
+  const kind = (r) => r.replace(/[d.]+/g, "#"); // ignore changing numbers when deciding to log
   if (kind(d.reason) !== kind(lastReason) && !d.reason.startsWith("At target")) event(d.reason);
   lastReason = d.reason;
   lastChecks = d.checks;
   Object.assign(house, { window: d.window, fan: d.fan, ac: d.ac });
+}
 
-  const dtH = 1 / 60;
-  const gains = HOUSE.solarGain * w.sun + HOUSE.internalGain;
-  const cop = acCop(w.tout);
-
-  // our house
-  let vent = 0;
-  if (house.window) vent = HOUSE.windowUA + AIR_KW_PER_M3H * HOUSE.fanMaxFlow * house.fan;
-  const q = (HOUSE.envelopeUA + vent) * (w.tout - house.tin) + gains - (house.ac ? HOUSE.acCoolKw : 0);
-  house.tin += (q * dtH) / HOUSE.capacity;
-  // where the heat is coming from right now, kW (+ heats the house, − cools it)
-  lastHeat = {
-    sun: +(HOUSE.solarGain * w.sun).toFixed(2),
-    walls: +(HOUSE.envelopeUA * (w.tout - house.tin)).toFixed(2),
+// where the heat is coming from right now, kW (+ heats the house, − cools it)
+function heatFlows(w) {
+  const vent = house.window ? HOUSE.windowUA + AIR_KW_PER_M3H * HOUSE.fanMaxFlow * house.fan : 0;
+  const parts = {
+    sun: HOUSE.solarGain * w.sun,
+    walls: HOUSE.envelopeUA * (w.tout - house.tin),
     inside: HOUSE.internalGain,
-    outsideAir: +(vent * (w.tout - house.tin)).toFixed(2),
+    outsideAir: vent * (w.tout - house.tin),
     ac: house.ac ? -HOUSE.acCoolKw : 0,
-    net: +q.toFixed(2), degPerHour: +(q / HOUSE.capacity).toFixed(2),
   };
-  const acKw = house.ac ? HOUSE.acCoolKw / cop : 0;
-  const fanKw = HOUSE.fanMaxKw * Math.pow(house.fan, 3) + (house.fan > 0 ? 0.01 : 0);
+  const net = parts.sun + parts.walls + parts.inside + parts.outsideAir + parts.ac;
+  return { ...parts, net, degPerHour: net / HOUSE.capacity };
+}
+const powerKw = (w) => ({
+  ac: house.ac ? HOUSE.acCoolKw / acCop(w.tout) : 0,
+  fan: house.fan > 0 ? HOUSE.fanMaxKw * Math.pow(house.fan, 3) + 0.01 : 0,
+});
+
+// ---------------- physics step (1 sim minute) ----------------
+function step() {
+  applyDecision();
+  const w = weatherAt(simMin);
+  if (house.window && !house.ac) today.outsideAirMin++;
+  if (house.ac) today.acMin++;
+  const { net } = heatFlows(w);
+  const p = powerKw(w);
+  house.tin += (net / 60) / HOUSE.capacity;
 
   simMin++;
+  if (simMin % 1440 === 0) today = { outsideAirMin: 0, acMin: 0 }; // new day at midnight
   if (simMin % 5 === 0) {
-    history.push({ m: simMin, tin: +house.tin.toFixed(2), tout: +w.tout.toFixed(2), sun: Math.round(w.sun), win: house.window ? 1 : 0, ac: house.ac ? 1 : 0, kw: +(acKw + fanKw).toFixed(2) });
+    history.push({ m: simMin, tin: +house.tin.toFixed(2), tout: +w.tout.toFixed(2), sun: Math.round(w.sun), win: house.window ? 1 : 0, ac: house.ac ? 1 : 0, kw: +(p.ac + p.fan).toFixed(2) });
     if (history.length > 288) history.shift(); // 24 h at 5-min resolution
   }
-  return { w, acKw, fanKw, cop };
 }
 
 // ---------------- MQTT ----------------
@@ -230,16 +241,17 @@ client.on("message", (topic, buf) => {
   let msg;
   try { msg = JSON.parse(buf.toString()); } catch { return event(`Ignored non-JSON command on ${topic}`); }
   const cmd = topic.slice((T + "cmd/").length);
+  if (!msg || typeof msg !== "object" || Array.isArray(msg)) return event(`Ignored command on ${topic}: expected a JSON object`);
 
   if (cmd === "override") {
     const allowed = { window: ["open", "closed"], fan: ["on", "off"], ac: ["on", "off"] };
-    if (!(msg.device in allowed)) return event(`Unknown device "${msg.device}"`);
+    if (typeof msg.device !== "string" || !Object.hasOwn(allowed, msg.device)) return event(`Unknown device "${msg.device}"`);
     if (msg.mode === "auto" || msg.mode == null) {
       overrides[msg.device] = null;
       event(`${msg.device} override cleared, back to auto`);
-    } else if (allowed[msg.device].includes(msg.mode)) {
+    } else if (typeof msg.mode === "string" && allowed[msg.device].includes(msg.mode)) {
       const hours = Number(msg.hours) > 0 ? Number(msg.hours) : null;
-      overrides[msg.device] = { mode: msg.mode, untilMin: hours ? simMin + hours * 60 : null };
+      overrides[msg.device] = { mode: msg.mode, untilMin: hours ? simMin + Math.round(hours * 60) : null };
       event(`Override: ${msg.device} ${msg.mode.toUpperCase()}${hours ? ` for ${hours} h` : " until cleared"}`);
     } else return event(`Bad mode "${msg.mode}" for ${msg.device}`);
     publishOverrides();
@@ -247,21 +259,23 @@ client.on("message", (topic, buf) => {
     const v = Number(msg.value);
     if (v >= 18 && v <= 30) { setpoint = v; event(`Setpoint changed to ${v}°C`); }
   } else if (cmd === "sim") {
-    if (msg.scenario in SCENARIOS && msg.scenario !== scenarioKey) { scenarioKey = msg.scenario; msg.reset = true; }
-    if (Number(msg.speed) > 0) speed = Math.min(60, Number(msg.speed));
+    if (typeof msg.scenario === "string" && Object.hasOwn(SCENARIOS, msg.scenario) && msg.scenario !== scenarioKey) { scenarioKey = msg.scenario; msg.reset = true; }
+    const sp = Math.round(Number(msg.speed));
+    if (sp >= 1) speed = Math.min(60, sp);
     if (typeof msg.paused === "boolean") paused = msg.paused;
-    if (msg.reset) { resetSim(); event(`Simulation reset: ${SCENARIOS[scenarioKey].label}`); pub("history", history, true); }
+    if (msg.reset === true) { resetSim(); event(`Simulation reset: ${SCENARIOS[scenarioKey].label}`); pub("history", history, true); }
   }
+  applyDecision();
 });
 
 // ---------------- main loop ----------------
 resetSim();
 setInterval(() => {
   if (!client.connected) return;
-  let s;
-  for (let i = 0; i < (paused ? 0 : speed); i++) s = step();
-  if (!s) { const w = weatherAt(simMin); s = { w, acKw: 0, fanKw: 0, cop: acCop(w.tout) }; }
-  const w = weatherAt(simMin);
+  if (paused) applyDecision(); // nothing moves, but overrides still take effect
+  else for (let i = 0; i < speed; i++) step();
+  const w = weatherAt(simMin), p = powerKw(w), h = heatFlows(w);
+  const r2 = (v) => +v.toFixed(2);
   pub("telemetry", {
     simMinute: simMin, day: Math.floor(simMin / 1440) + 1, hour: +w.hour.toFixed(3),
     scenario: scenarioKey, scenarios: Object.fromEntries(Object.entries(SCENARIOS).map(([k, v]) => [k, v.label])),
@@ -270,8 +284,10 @@ setInterval(() => {
     indoor: { temp: +house.tin.toFixed(2) },
     window: { open: house.window, override: overrides.window },
     fan: { speed: +house.fan.toFixed(2), override: overrides.fan },
-    ac: { on: house.ac, kw: +s.acKw.toFixed(2), cop: +s.cop.toFixed(2), override: overrides.ac },
-    reason: lastReason, checks: lastChecks, heat: lastHeat,
+    ac: { on: house.ac, kw: r2(p.ac), cop: r2(acCop(w.tout)), override: overrides.ac },
+    reason: lastReason, checks: lastChecks,
+    heat: { sun: r2(h.sun), walls: r2(h.walls), inside: r2(h.inside), outsideAir: r2(h.outsideAir), ac: r2(h.ac), net: r2(h.net), degPerHour: r2(h.degPerHour) },
+    today: { outsideAirHours: +(today.outsideAirMin / 60).toFixed(2), acHours: +(today.acMin / 60).toFixed(2) },
   }, true);
   if (simMin % 30 < speed || paused) pub("history", history, true);
 }, 1000);

@@ -6,19 +6,20 @@
 <title>CoolAir Dashboard</title>
 <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
-  /* Same dark palette and patterns as the KitchenGuard dashboard */
+  /* Dark navy base with blue and lavender accents */
   :root {
-    --bg: #0f1419; --card: #182029; --card2: #1f2933; --line: #2a3542; --text: #e6edf3; --muted: #8b98a5;
-    --safe: #2ecc71; --warn: #f5a623; --alarm: #ff4d4f; --accent: #4da3ff;
+    --bg: #10121e; --card: #191c2e; --card2: #21253b; --line: #2e3350; --text: #ecebff; --muted: #9c9fc4;
+    --safe: #2ecc71; --warn: #f5a623; --alarm: #ff4d4f; --accent: #7c9cff; --lavender: #b9a6ff;
     --cool: #38bdf8; --warm: #ff8a4c; --sun: #f5a623;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-  header { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--line); }
-  h1 { font-size: 20px; margin: 0; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text);
+    background: radial-gradient(1200px 500px at 10% -10%, rgba(124,156,255,.14), transparent 60%), radial-gradient(900px 500px at 100% 0%, rgba(185,166,255,.12), transparent 60%), var(--bg); background-attachment: fixed; min-height: 100vh; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, rgba(124,156,255,.10), rgba(185,166,255,.10)); }
+  h1 { font-size: 20px; margin: 0; background: linear-gradient(90deg, var(--accent), var(--lavender)); -webkit-background-clip: text; background-clip: text; color: transparent; }
   header .sub { margin: 2px 0 0; font-size: 12px; }
-  .card h2, h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; font-weight: 700; }
+  .card h2, h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--lavender); margin: 0 0 12px; font-weight: 700; }
 
   main { max-width: 1240px; margin: 0 auto; padding: 16px 20px 40px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
@@ -39,18 +40,35 @@
   button { background: var(--line); color: var(--text); border: 0; border-radius: 8px; padding: 9px 14px; font-size: 14px; cursor: pointer; }
   button:hover:not(:disabled) { filter: brightness(1.25); }
   button.plain { padding: 7px 12px; font-size: 13px; }
-  #connectBtn { background: var(--accent); color: #fff; }
+  #connectBtn { background: linear-gradient(90deg, var(--accent), var(--lavender)); color: #10121e; font-weight: 600; }
   select, input { background: var(--card2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font-size: 14px; }
 
-  /* override buttons: the active mode gets the accent outline, like KitchenGuard's .active */
+  /* override buttons: the active mode gets a lavender outline */
   .seg { display: flex; gap: 6px; flex-wrap: wrap; }
   .seg button { padding: 8px 12px; font-size: 13px; }
-  .seg button.sel { outline: 2px solid var(--accent); background: rgba(77,163,255,.15); }
+  .seg button.sel { outline: 2px solid var(--lavender); background: rgba(185,166,255,.18); }
   .device .state { font-size: 22px; font-weight: 700; margin: 0 0 12px; }
   .device.forced { border-color: var(--warn); }
   .ovr { margin-top: 10px; font-size: 12px; color: var(--warn); min-height: 16px; }
 
   .reason { font-size: 16px; font-weight: 600; }
+
+  /* mode banner: one of three states, plus today's outside-air hours */
+  .mode { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center; border-radius: 14px; padding: 18px 20px; border: 1px solid var(--line); transition: background .4s, border-color .4s; }
+  @media (max-width: 640px) { .mode { grid-template-columns: 1fr; } }
+  .mode-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .mode-title { font-size: 28px; font-weight: 800; line-height: 1.15; margin: 4px 0 6px; }
+  .mode-sub { font-size: 14px; color: var(--text); opacity: .85; max-width: 60ch; }
+  .mode-count { text-align: right; padding-left: 20px; border-left: 1px solid var(--line); max-width: 320px; }
+  @media (max-width: 640px) { .mode-count { text-align: left; padding-left: 0; border-left: 0; border-top: 1px solid var(--line); padding-top: 14px; max-width: none; } }
+  .mode-hours { font-size: 40px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; margin: 4px 0 6px; color: var(--lavender); }
+  .mode-hours small { font-size: 16px; color: var(--muted); font-weight: 600; }
+  .mode-air  { background: linear-gradient(110deg, rgba(124,156,255,.26), rgba(185,166,255,.24)); border-color: rgba(185,166,255,.55); }
+  .mode-air .mode-title { background: linear-gradient(90deg, var(--accent), var(--lavender)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .mode-ac   { background: rgba(245,166,35,.14); border-color: rgba(245,166,35,.55); }
+  .mode-ac .mode-title { color: var(--warn); }
+  .mode-hold { background: var(--card); }
+  .mode-hold .mode-title { color: var(--muted); }
 
   /* "why" checklist */
   .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -60,7 +78,7 @@
   .checks .fail .ic { background: rgba(255,77,79,.18); color: var(--alarm); }
   .checks b { display: block; font-size: 14px; }
   .checks small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .verdict { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: rgba(77,163,255,.12); color: var(--text); font-size: 14px; }
+  .verdict { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: linear-gradient(90deg, rgba(124,156,255,.14), rgba(185,166,255,.14)); border: 1px solid rgba(185,166,255,.25); color: var(--text); font-size: 14px; }
 
   /* heat flow bars: centred on zero, red = heating, blue = cooling */
   .hrow { display: grid; grid-template-columns: 150px 1fr 64px; gap: 10px; align-items: center; padding: 5px 0; font-size: 13px; }
@@ -104,6 +122,19 @@
   <div id="offline" class="hidden">
     No data yet. Start the broker with <code>npm run broker</code> and the simulator with <code>npm start</code>, then open <code>http://localhost:8080</code>.
   </div>
+
+  <section class="mode span12 mode-hold" id="mode" aria-live="polite">
+    <div class="mode-main">
+      <div class="mode-label">Right now</div>
+      <div class="mode-title" id="modeTitle">Holding steady</div>
+      <div class="mode-sub" id="modeSub">–</div>
+    </div>
+    <div class="mode-count">
+      <div class="mode-label">Today</div>
+      <div class="mode-hours"><span id="airHours">0.0</span><small> h</small></div>
+      <div class="mode-sub" id="airSub">Outside air has cooled the house for 0.0 hours today, and the AC stayed off.</div>
+    </div>
+  </section>
 
   <section class="card span6">
     <h2 id="outTitle">Outdoor</h2>
@@ -213,7 +244,7 @@ function connect(url) {
     if (k === "status") return setPill("simStatus", s === "online", "simulator " + s);
     let m; try { m = JSON.parse(s); } catch { return; }
     if (k === "telemetry") { last = m; render(m); }
-    else if (k === "history") { history = m; drawChart(); }
+    else if (k === "history") { history = Array.isArray(m) ? m : []; drawChart(); }
     else if (k === "events") addLog(m);
   });
 }
@@ -262,6 +293,7 @@ function render(m) {
     : "No sunlight means no solar heat. Night is when outside air is most useful.";
   renderWhy(m);
   renderHeat(m.heat);
+  renderMode(m);
   $("tin").textContent = fmtT(m.indoor.temp);
   $("inSub").textContent = `Target ${fmtT(m.setpoint)}`;
   $("sp").textContent = fmtT(m.setpoint);
@@ -281,6 +313,40 @@ function render(m) {
       : "";
   }
 
+}
+
+function renderMode(m) {
+  const c = m.checks, t = (v) => v.toFixed(1) + "°C";
+  let mode, title, sub;
+  if (m.ac.on) {
+    mode = "ac"; title = "Cooling with AC";
+    const why = !c ? "" :
+      m.window.override && m.window.override.mode === "closed" ? "The window is held closed by your override, " :
+      c.gap < c.needGap ? `Outside is ${t(c.tout)}, too warm to help, ` :
+      c.dewPoint > c.maxDewPoint ? "Outside air is too muggy to use, " :
+      c.tout < c.minOutdoor ? "Outside is too cold to bring in, " : "";
+    const behind = c && c.tin > m.setpoint + 1;
+    sub = behind
+      ? `${why}${why ? "so the" : "The"} AC is running flat out, but the house is ${t(c.tin)}, above the ${t(m.setpoint)} target.`
+      : `${why}${why ? "so the" : "The"} AC is holding the house at ${t(m.setpoint)}.`;
+    if (m.window.open) sub += " Warning: the window is open while the AC runs.";
+  } else if (m.window.open) {
+    mode = "air"; title = "Cooling with outside air";
+    sub = `The window is open${m.fan.speed > 0 ? `, the fan is pulling air in at ${Math.round(m.fan.speed * 100)}%` : ""}, and the AC is off.` +
+      (c ? ` Outside is ${t(Math.max(0, c.gap))} cooler than inside.` : "");
+  } else {
+    mode = "hold"; title = "Holding steady";
+    sub = c && c.tin <= m.setpoint + 0.5
+      ? `Inside is ${t(c.tin)}, within range of the ${t(m.setpoint)} target. Nothing needs to run right now.`
+      : "Nothing needs to run right now.";
+  }
+  const el = $("mode");
+  el.className = `mode span12 mode-${mode}`;
+  $("modeTitle").textContent = title;
+  $("modeSub").textContent = sub;
+  const air = m.today ? m.today.outsideAirHours : 0, ac = m.today ? m.today.acHours : 0;
+  $("airHours").textContent = air.toFixed(1);
+  $("airSub").textContent = `Outside air has cooled the house for ${air.toFixed(1)} hour${air.toFixed(1) === "1.0" ? "" : "s"} today, and the AC stayed off. The AC has run ${ac.toFixed(1)} h.`;
 }
 
 function renderWhy(m) {
