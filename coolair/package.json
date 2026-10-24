@@ -1,0 +1,15 @@
+{
+  "name": "coolair",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Outside-air fan + window simulation that offsets AC load, routed over MQTT.",
+  "main": "simulator.js",
+  "scripts": {
+    "broker": "docker compose up -d",
+    "broker:stop": "docker compose down",
+    "start": "node simulator.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.10.1"
+  }
+}

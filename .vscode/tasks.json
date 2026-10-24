@@ -1,0 +1,28 @@
+{
+  // Terminal > Run Task... > "CoolAir: start everything"
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CoolAir: broker",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "options": { "cwd": "${workspaceFolder}/coolair" },
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
+      "label": "CoolAir: simulator",
+      "type": "shell",
+      "command": "npm start",
+      "options": { "cwd": "${workspaceFolder}/coolair" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "CoolAir: start everything",
+      "dependsOn": ["CoolAir: broker", "CoolAir: simulator"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    }
+  ]
+}
