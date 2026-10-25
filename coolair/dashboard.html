@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CoolAir Dashboard</title>
-<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
 <style>
   /* Dark navy base with blue and lavender accents */
   :root {
@@ -99,7 +98,14 @@
   #log li { padding: 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); }
   #log b { color: var(--text); font-weight: 500; margin-right: 8px; font-variant-numeric: tabular-nums; }
 
-  .hidden { display: none; }
+  .src { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--card2); border: 1px solid var(--line); color: var(--muted); }
+  .src.live { color: var(--safe); border-color: rgba(46,204,113,.4); background: rgba(46,204,113,.12); }
+  .person { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .person b { font-size: 18px; }
+  input[type=range] { width: 100%; accent-color: var(--lavender); padding: 0; border: 0; background: transparent; }
+  .scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  #toast { grid-column: span 12; padding: 10px 16px; border-radius: 10px; background: rgba(255,77,79,.15); border: 1px solid rgba(255,77,79,.4); color: var(--text); font-size: 14px; }
+  .hidden, [hidden] { display: none !important; }
   #offline { grid-column: span 12; padding: 10px 16px; border-radius: 10px; background: rgba(245,166,35,.12); color: var(--warn); font-size: 13px; text-align: center; }
   code { background: var(--card2); padding: 1px 5px; border-radius: 4px; }
 </style>
@@ -108,20 +114,19 @@
 <header>
   <div>
     <h1>CoolAir</h1>
-    <div class="sub">Outside-air fan + window to take load off the AC</div>
+    <div class="sub">Window, intake fan, blinds and AC working together to cool with outside air</div>
   </div>
   <div class="row">
-    <input id="brokerUrl" size="24" aria-label="Broker WebSocket URL">
-    <button class="plain" id="connectBtn">Connect</button>
     <span class="pill" id="conn"><span class="dot"></span><span>connecting…</span></span>
-    <span class="pill" id="simStatus"><span class="dot"></span><span>simulator ?</span></span>
+    <span class="pill" id="espStatus"><span class="dot"></span><span>PSoC not connected</span></span>
   </div>
 </header>
 
 <main>
   <div id="offline" class="hidden">
-    No data yet. Start the broker with <code>npm run broker</code> and the simulator with <code>npm start</code>, then open <code>http://localhost:8080</code>.
+    Can't reach the CoolAir server. Start it with <code>npm start</code> in the <code>coolair</code> folder, then open <code>http://localhost:8080</code>.
   </div>
+  <div id="toast" class="hidden" role="alert"></div>
 
   <section class="mode span12 mode-hold" id="mode" aria-live="polite">
     <div class="mode-main">
@@ -138,7 +143,10 @@
 
   <section class="card span6">
     <h2 id="outTitle">Outdoor</h2>
-    <div class="big" id="tout">–</div>
+    <div class="row" style="align-items:baseline">
+      <div class="big" id="tout">–</div>
+      <span class="src" id="toutSrc">–</span>
+    </div>
     <div class="sub" id="outSub">–</div>
     <div class="bar"><i id="sunBar" style="background:var(--sun);width:0"></i></div>
     <div class="sub"><b id="sunTxt" style="color:var(--text)">Sunlight –</b></div>
@@ -146,13 +154,25 @@
   </section>
   <section class="card span6">
     <h2>Indoor</h2>
-    <div class="big" id="tin">–</div>
-    <div class="sub" id="inSub">–</div>
-    <div class="row" style="margin-top:8px">
-      <span class="sub">Setpoint</span>
-      <button class="plain" data-sp="-0.5" aria-label="Lower setpoint">−</button>
+    <div class="row" style="align-items:baseline">
+      <div class="big" id="tin">–</div>
+      <span class="src" id="tinSrc">–</span>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <span class="sub">Target</span>
+      <button class="plain" data-sp="-0.5" aria-label="Lower target">−</button>
       <b id="sp">–</b>
-      <button class="plain" data-sp="0.5" aria-label="Raise setpoint">+</button>
+      <button class="plain" data-sp="0.5" aria-label="Raise target">+</button>
+    </div>
+    <div class="person">
+      <div>
+        <div class="sub">Person detected</div>
+        <div class="row" style="align-items:baseline"><b id="personState">–</b><span class="src" id="personSrc">–</span></div>
+        <div class="sub" id="personWhy">–</div>
+      </div>
+      <div class="seg" id="personBtns" role="group" aria-label="Simulate a person">
+        <button data-person="true">Someone home</button><button data-person="false">Nobody home</button>
+      </div>
     </div>
   </section>
 
@@ -163,39 +183,46 @@
 
   <section class="card span6">
     <h2 id="whyTitle">Why is the window closed?</h2>
-    <p class="sub" style="margin:0 0 10px">The window opens on its own only when <b>every</b> check below passes. Then the fan pulls the cooler outside air in, and the AC can stay off.</p>
+    <p class="sub" style="margin:0 0 10px">The window is always automatic. It opens only when <b>every</b> check below passes. Then the intake fan pulls the cooler outside air in, and the AC can stay off.</p>
     <ul class="checks" id="checks"></ul>
     <div class="verdict" id="verdict">–</div>
   </section>
 
   <section class="card span6">
     <h2>Heat flowing into the house right now</h2>
-    <p class="sub" style="margin:0 0 10px">Red adds heat, blue takes it away. The sun is usually the biggest red bar in the afternoon. That's why the AC works hardest then, and why the window stays shut.</p>
+    <p class="sub" style="margin:0 0 10px">Red adds heat, blue takes it away. The sun is usually the biggest red bar in the afternoon; closing the blinds shrinks it.</p>
     <div id="heat"></div>
     <div class="verdict" id="heatNet">–</div>
   </section>
 
-  <section class="card span4 device" data-dev="window">
+  <section class="card span3 device" data-dev="window">
     <h2>Window</h2>
     <div class="state" id="winState">–</div>
-    <div class="seg" role="group" aria-label="Window override">
-      <button data-mode="auto">Auto</button><button data-mode="open">Force open</button><button data-mode="closed">Keep closed</button>
-    </div>
-    <div class="ovr"></div>
+    <div class="sub">Always automatic. It opens when outside air can cool the house.</div>
   </section>
-  <section class="card span4 device" data-dev="fan">
-    <h2>Outside-air fan</h2>
+  <section class="card span3 device" data-dev="intakeFan">
+    <h2>Intake fan</h2>
     <div class="state" id="fanState">–</div>
-    <div class="seg" role="group" aria-label="Fan override">
-      <button data-mode="auto">Auto</button><button data-mode="on">Force on</button><button data-mode="off">Force off</button>
+    <div class="seg" role="group" aria-label="Intake fan override">
+      <button data-mode="auto">Auto</button><button data-mode="on">On</button><button data-mode="off">Off</button>
     </div>
     <div class="ovr"></div>
   </section>
-  <section class="card span4 device" data-dev="ac">
+  <section class="card span3 device" data-dev="ac">
     <h2>Air conditioner</h2>
     <div class="state" id="acState">–</div>
     <div class="seg" role="group" aria-label="AC override">
-      <button data-mode="auto">Auto</button><button data-mode="on">Force on</button><button data-mode="off">Force off</button>
+      <button data-mode="auto">Auto</button><button data-mode="on">On</button><button data-mode="off">Off</button>
+    </div>
+    <div class="ovr"></div>
+  </section>
+  <section class="card span3 device" data-dev="blinds">
+    <h2>Blinds</h2>
+    <div class="state" id="blindsState">–</div>
+    <input type="range" id="blindsSlider" min="0" max="100" step="5" value="0" aria-label="Blinds, 0 open to 100 closed">
+    <div class="scale"><span>0 open</span><span>100 closed</span></div>
+    <div class="seg" role="group" aria-label="Blinds override" style="margin-top:8px">
+      <button data-mode="auto">Auto</button>
     </div>
     <div class="ovr"></div>
   </section>
@@ -206,7 +233,7 @@
     <div class="legend">
       <span style="--c:var(--warm)">Outdoor °C</span>
       <span style="--c:var(--cool)">Indoor °C</span>
-      <span style="--c:var(--muted)">Setpoint</span>
+      <span style="--c:var(--muted)">Target</span>
       <span style="--c:rgba(56,189,248,.35)">Window open</span>
       <span style="--c:var(--sun)">Sun</span>
     </div>
@@ -218,41 +245,25 @@
 </main>
 
 <script>
-const T = "coolair/";
+// Talks to simulator.js over plain HTTP: polls /api/state, sends changes as GET requests with query parameters.
+const API = location.protocol.startsWith("http") ? "" : "http://localhost:8080"; // works when opened as a file too
 const $ = (id) => document.getElementById(id);
-const defaultUrl = `ws://${location.hostname || "localhost"}:9001`;
-let brokerUrl = defaultUrl;
-try { brokerUrl = localStorage.getItem("coolair.broker") || defaultUrl; } catch {}
-$("brokerUrl").value = brokerUrl;
+let last = null, history = [], lastEventId = 0, failures = 0;
 
-let client, last = null, history = [];
-
-function connect(url) {
-  if (client) client.end(true);
-  setPill("conn", null, "connecting…");
-  client = mqtt.connect(url, { clientId: "coolair-dash-" + Math.random().toString(16).slice(2, 8), reconnectPeriod: 2000 });
-  client.on("connect", () => {
-    setPill("conn", true, "broker connected");
-    client.subscribe([T + "telemetry", T + "history", T + "events", T + "status", T + "overrides"]);
-  });
-  client.on("reconnect", () => setPill("conn", null, "reconnecting…"));
-  client.on("offline", () => setPill("conn", false, "broker offline"));
-  client.on("error", () => setPill("conn", false, "broker error"));
-  client.on("message", (topic, buf) => {
-    const s = buf.toString();
-    const k = topic.slice(T.length);
-    if (k === "status") return setPill("simStatus", s === "online", "simulator " + s);
-    let m; try { m = JSON.parse(s); } catch { return; }
-    if (k === "telemetry") { last = m; render(m); }
-    else if (k === "history") { history = Array.isArray(m) ? m : []; drawChart(); }
-    else if (k === "events") addLog(m);
-  });
+async function poll() {
+  try {
+    const r = await fetch(API + "/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const m = await r.json();
+    failures = 0;
+    setPill("conn", true, "server connected");
+    render(m);
+  } catch {
+    failures++;
+    setPill("conn", false, "server offline");
+    if (failures >= 3) $("offline").classList.remove("hidden");
+  }
 }
-$("connectBtn").onclick = () => {
-  const url = $("brokerUrl").value.trim();
-  try { localStorage.setItem("coolair.broker", url); } catch {}
-  connect(url);
-};
 
 function setPill(id, ok, text) {
   const el = $(id);
@@ -261,87 +272,133 @@ function setPill(id, ok, text) {
   el.lastElementChild.textContent = text;
 }
 
-function send(cmd, obj) {
-  if (!client || !client.connected) return alert("Not connected to the broker.");
-  client.publish(T + "cmd/" + cmd, JSON.stringify(obj), { qos: 1 });
+let toastTimer;
+function showToast(msg) {
+  $("toast").textContent = msg;
+  $("toast").classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.add("hidden"), 4000);
 }
 
-// ---- overrides ----
+async function send(route, params) {
+  try {
+    const r = await fetch(`${API}/api/${route}?${new URLSearchParams(params)}`, { cache: "no-store" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok || !body.ok) return showToast(body.error || `Request failed (HTTP ${r.status})`);
+    if (body.state) render(body.state);
+  } catch {
+    showToast("Can't reach the CoolAir server.");
+  }
+}
+
+// ---- controls ----
 document.querySelectorAll(".device").forEach((card) => {
-  card.querySelectorAll("button").forEach((b) => b.onclick = () =>
-    send("override", { device: card.dataset.dev, mode: b.dataset.mode }));
+  card.querySelectorAll(".seg button").forEach((b) => b.onclick = () => send("override", { device: card.dataset.dev, mode: b.dataset.mode }));
 });
+$("blindsSlider").oninput = (e) => { $("blindsState").textContent = `${e.target.value}% closed`; };
+$("blindsSlider").onchange = (e) => send("override", { device: "blinds", value: e.target.value });
 document.querySelectorAll("[data-sp]").forEach((b) => b.onclick = () => {
   if (last) send("setpoint", { value: last.setpoint + Number(b.dataset.sp) });
 });
+document.querySelectorAll("[data-person]").forEach((b) => b.onclick = () => send("sim", { person: b.dataset.person }));
 
 // ---- rendering ----
 const fmtT = (v) => v.toFixed(1) + "°C";
 const hhmm = (h) => `${String(Math.floor(h)).padStart(2, "0")}:${String(Math.floor((h % 1) * 60)).padStart(2, "0")}`;
+const onOff = (b) => (b ? "On" : "Off");
 
 function render(m) {
+  last = m;
   $("offline").classList.add("hidden");
-  $("outTitle").textContent = `Outdoor · ${hhmm(m.hour)}`;
+  const inp = m.inputs || {}, out = m.outputs || {}, ovr = m.overrides || {};
+
+  const age = inp.sensorLastSeenS;
+  if (age === null || age === undefined) setPill("espStatus", null, "PSoC not connected");
+  else if (age < 30) setPill("espStatus", true, `PSoC seen ${age}s ago`);
+  else setPill("espStatus", false, `PSoC silent for ${age}s`);
+
+  $("outTitle").textContent = `Outdoor · ${m.clock || hhmm(m.hour)}`;
   $("tout").textContent = fmtT(m.outdoor.temp);
+  $("toutSrc").textContent = inp.outdoorSource === "sensor" ? "from the sensor" : "simulated";
+  $("toutSrc").classList.toggle("live", inp.outdoorSource === "sensor");
   $("outSub").textContent = `${m.outdoor.humidity.toFixed(0)}% humidity · dew point ${m.outdoor.dewPoint.toFixed(0)}°C`;
   $("sunBar").style.width = Math.min(100, m.outdoor.sun / 10) + "%";
   const sun = m.outdoor.sun, sunKw = m.heat ? m.heat.sun : 0;
   const sunLevel = sun <= 0 ? "none (sun is down)" : sun < 250 ? "weak" : sun < 600 ? "moderate" : "strong";
   $("sunTxt").textContent = `Sunlight: ${sunLevel}${sun > 0 ? ` · ${sun} W/m²` : ""}`;
   $("sunWhy").textContent = sun > 0
-    ? `This is how strong the sunlight is, not a temperature. Right now it's heating the house by ${sunKw.toFixed(1)} kW through the windows and roof, roughly ${Math.max(1, Math.round(sunKw / 1.5))} space heater${Math.round(sunKw / 1.5) > 1 ? "s" : ""}.`
+    ? `This is how strong the sunlight is, not a temperature. Right now it's heating the house by ${sunKw.toFixed(1)} kW${out.blinds ? ` with the blinds ${out.blinds}% closed` : " through the windows and roof"}.`
     : "No sunlight means no solar heat. Night is when outside air is most useful.";
-  renderWhy(m);
-  renderHeat(m.heat);
-  renderMode(m);
-  $("tin").textContent = fmtT(m.indoor.temp);
-  $("inSub").textContent = `Target ${fmtT(m.setpoint)}`;
+
+  $("tin").textContent = fmtT(inp.indoorTemp);
+  $("tinSrc").textContent = inp.indoorSource === "sensor" ? "from the sensor" : "simulated";
+  $("tinSrc").classList.toggle("live", inp.indoorSource === "sensor");
   $("sp").textContent = fmtT(m.setpoint);
+  $("personState").textContent = inp.person ? "Yes" : "No";
+  $("personSrc").textContent = inp.personSource === "sensor" ? "from the sensor" : "simulated";
+  $("personSrc").classList.toggle("live", inp.personSource === "sensor");
+  $("personWhy").textContent = inp.person
+    ? "Someone's here, so the AC holds the target."
+    : `Nobody's here, so the AC lets the room drift up to ${m.checks ? fmtT(m.checks.acTarget) : "a warmer target"} to save energy.`;
+  $("personBtns").hidden = inp.personSource === "sensor"; // the real sensor is in charge
+  document.querySelectorAll("[data-person]").forEach((b) => b.classList.toggle("sel", String(inp.person) === b.dataset.person));
 
   $("reason").textContent = m.reason || "–";
+  renderMode(m);
+  renderWhy(m);
+  renderHeat(m.heat);
 
-  $("winState").textContent = m.window.open ? "Open" : "Closed";
-  $("fanState").textContent = m.fan.speed > 0 ? `On · ${Math.round(m.fan.speed * 100)}%` : "Off";
-  $("acState").textContent = m.ac.on ? `On · ${m.ac.kw.toFixed(2)} kW (COP ${m.ac.cop})` : "Off";
-  for (const dev of ["window", "fan", "ac"]) {
-    const o = m[dev].override;
+  $("winState").textContent = out.window ? "Open" : "Closed";
+  $("fanState").textContent = onOff(out.intakeFan);
+  $("acState").textContent = out.ac ? `On · ${m.ac.kw.toFixed(2)} kW (COP ${m.ac.cop})` : "Off";
+  $("blindsState").textContent = `${out.blinds}% closed`;
+  if (document.activeElement !== $("blindsSlider")) $("blindsSlider").value = out.blinds;
+  for (const dev of ["intakeFan", "ac", "blinds"]) {
+    const o = ovr[dev] ?? null;
     const card = document.querySelector(`.device[data-dev="${dev}"]`);
-    card.querySelectorAll("button").forEach((b) => b.classList.toggle("sel", (o ? o.mode : "auto") === b.dataset.mode));
-    card.classList.toggle("forced", !!o);
-    card.querySelector(".ovr").textContent = o
-      ? "Manual override active. Click Auto to hand control back."
-      : "";
+    const selMode = o === null ? "auto" : dev === "blinds" ? null : o;
+    card.querySelectorAll(".seg button").forEach((b) => b.classList.toggle("sel", b.dataset.mode === selMode));
+    card.classList.toggle("forced", o !== null);
+    card.querySelector(".ovr").textContent = o === null ? ""
+      : dev === "blinds" ? `Held at ${o}% by you. Click Auto to hand control back.`
+      : "Manual override active. Click Auto to hand control back.";
   }
 
+  if (Array.isArray(m.history)) { history = m.history; drawChart(); }
+  if (Array.isArray(m.events)) {
+    const newest = m.events.length ? m.events[m.events.length - 1].id : 0;
+    if (newest < lastEventId) { lastEventId = 0; $("log").replaceChildren(); } // server restarted
+    for (const ev of m.events) if (ev.id > lastEventId) { addLog(ev); lastEventId = ev.id; }
+  }
 }
 
 function renderMode(m) {
-  const c = m.checks, t = (v) => v.toFixed(1) + "°C";
+  const c = m.checks, out = m.outputs || {}, ovr = m.overrides || {}, t = (v) => v.toFixed(1) + "°C";
+  const target = c ? c.acTarget : m.setpoint;
   let mode, title, sub;
-  if (m.ac.on) {
+  if (m.mode === "ac") {
     mode = "ac"; title = "Cooling with AC";
-    const why = !c ? "" :
-      m.window.override && m.window.override.mode === "closed" ? "The window is held closed by your override, " :
+    const why = ovr.ac === "on" ? "You turned the AC on, " :
+      !c ? "" :
       c.gap < c.needGap ? `Outside is ${t(c.tout)}, too warm to help, ` :
       c.dewPoint > c.maxDewPoint ? "Outside air is too muggy to use, " :
       c.tout < c.minOutdoor ? "Outside is too cold to bring in, " : "";
-    const behind = c && c.tin > m.setpoint + 1;
-    sub = behind
-      ? `${why}${why ? "so the" : "The"} AC is running flat out, but the house is ${t(c.tin)}, above the ${t(m.setpoint)} target.`
-      : `${why}${why ? "so the" : "The"} AC is holding the house at ${t(m.setpoint)}.`;
-    if (m.window.open) sub += " Warning: the window is open while the AC runs.";
-  } else if (m.window.open) {
+    sub = c && c.tin > target + 1
+      ? `${why}${why ? "so the" : "The"} AC is running flat out, but the house is ${t(c.tin)}, above the ${t(target)} target.`
+      : `${why}${why ? "so the" : "The"} AC is holding the house at ${t(target)}.`;
+    if (out.window) sub += " Warning: the window is open while the AC runs.";
+  } else if (m.mode === "outside-air") {
     mode = "air"; title = "Cooling with outside air";
-    sub = `The window is open${m.fan.speed > 0 ? `, the fan is pulling air in at ${Math.round(m.fan.speed * 100)}%` : ""}, and the AC is off.` +
+    sub = `The window is open${out.intakeFan ? ", the intake fan is pulling air in" : " (intake fan off, so air comes in slowly)"}, and the AC is off.` +
       (c ? ` Outside is ${t(Math.max(0, c.gap))} cooler than inside.` : "");
   } else {
     mode = "hold"; title = "Holding steady";
-    sub = c && c.tin <= m.setpoint + 0.5
-      ? `Inside is ${t(c.tin)}, within range of the ${t(m.setpoint)} target. Nothing needs to run right now.`
+    sub = c && c.tin <= target + 0.5
+      ? `Inside is ${t(c.tin)}, within range of the ${t(target)} target. Nothing needs to run right now.`
       : "Nothing needs to run right now.";
   }
-  const el = $("mode");
-  el.className = `mode span12 mode-${mode}`;
+  if (out.blinds >= 50 && m.outdoor.sun > 0) sub += ` Blinds ${out.blinds}% closed against the sun.`;
+  $("mode").className = `mode span12 mode-${mode}`;
   $("modeTitle").textContent = title;
   $("modeSub").textContent = sub;
   const air = m.today ? m.today.outsideAirHours : 0, ac = m.today ? m.today.acHours : 0;
@@ -352,9 +409,10 @@ function renderMode(m) {
 function renderWhy(m) {
   const c = m.checks;
   if (!c) return;
-  const open = m.window.open, o = m.window.override;
+  const open = !!(m.outputs && m.outputs.window);
   $("whyTitle").textContent = `Why is the window ${open ? "open" : "closed"}?`;
   const t = (v) => v.toFixed(1) + "°C";
+  const needOk = open ? c.tin > c.target - 0.5 : c.tin > c.target;
   const rows = [
     {
       ok: c.gap >= c.needGap,
@@ -374,15 +432,16 @@ function renderWhy(m) {
       why: `Needs at least ${c.minOutdoor}°C outside, so it doesn't over-chill the house.`,
     },
     {
-      ok: open ? c.tin > c.target - 0.5 : c.tin > c.target,
-      title: (open ? c.tin > c.target - 0.5 : c.tin > c.target) ? "The house still needs cooling" : "The house is already cool enough",
+      ok: needOk,
+      title: needOk ? "The house still needs cooling" : "The house is already cool enough",
       why: c.precool
         ? `Overnight target is ${t(c.target)} (setpoint ${t(m.setpoint)} minus 3°C). It cools the house extra now so it starts tomorrow's sunny afternoon cooler and the AC runs less.`
-        : `Target is the setpoint, ${t(c.target)}. Inside is ${t(c.tin)}.`,
+        : c.person === false
+          ? `Nobody's detected, so the target is relaxed to ${t(c.target)}. Inside is ${t(c.tin)}.`
+          : `Target is the setpoint, ${t(c.target)}. Inside is ${t(c.tin)}.`,
     },
   ];
-  const ul = $("checks");
-  ul.replaceChildren(...rows.map((r) => {
+  $("checks").replaceChildren(...rows.map((r) => {
     const li = document.createElement("li");
     li.className = r.ok ? "pass" : "fail";
     li.innerHTML = `<span class="ic"></span><div><b></b><small></small></div>`;
@@ -392,11 +451,9 @@ function renderWhy(m) {
     return li;
   }));
   const failed = rows.filter((r) => !r.ok).length;
-  $("verdict").textContent = o
-    ? `You overrode this: the window is forced ${o.mode === "open" ? "OPEN" : "CLOSED"}, so the checks above are ignored. Click Auto on the Window card to hand control back.`
-    : c.freeCool
-      ? "All checks pass, so the window is OPEN, the fan pulls in outside air, and the AC stays off."
-      : `${failed} check${failed > 1 ? "s" : ""} failed, so the window stays CLOSED. The AC keeps the house at ${t(m.setpoint)}, switching on above ${t(m.setpoint + 0.5)}.`;
+  $("verdict").textContent = c.freeCool
+    ? "All checks pass, so the window is OPEN, the intake fan pulls in outside air, and the AC stays off."
+    : `${failed} check${failed > 1 ? "s" : ""} failed, so the window stays CLOSED. The AC keeps the house at ${t(c.acTarget)}, switching on above ${t(c.acTarget + 0.5)}.`;
 }
 
 function renderHeat(h) {
@@ -408,7 +465,7 @@ function renderHeat(h) {
     ["Outside air", h.outsideAir ? "window + fan" : "window shut", h.outsideAir],
     ["AC", h.ac ? "running" : "off", h.ac],
   ];
-  const max = 5; // kW at the end of each half of the track
+  const max = 7; // kW at the end of each half of the track (the AC's full output)
   $("heat").replaceChildren(...rows.map(([name, note, kw]) => {
     const d = document.createElement("div");
     d.className = "hrow";
@@ -445,9 +502,10 @@ function drawChart() {
   const W = c.clientWidth, H = c.clientHeight;
   c.width = W * dpr; c.height = H * dpr;
   const g = c.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
-  if (history.length < 2) return;
+  if (!Array.isArray(history) || history.length < 2) return;
+  const target = last && last.checks ? last.checks.acTarget : last ? last.setpoint : null;
   const pad = { l: 36, r: 8, t: 8, b: 22 };
-  const temps = history.flatMap((p) => [p.tin, p.tout]).concat(last ? [last.setpoint] : []);
+  const temps = history.flatMap((p) => [p.tin, p.tout]).concat(target !== null ? [target] : []);
   const lo = Math.floor(Math.min(...temps) - 1), hi = Math.ceil(Math.max(...temps) + 1);
   const m0 = history[0].m, m1 = history[history.length - 1].m;
   const x = (m) => pad.l + ((m - m0) / Math.max(1, m1 - m0)) * (W - pad.l - pad.r);
@@ -475,14 +533,14 @@ function drawChart() {
     history.forEach((p, i) => (i ? g.lineTo : g.moveTo).call(g, x(p.m), y(typeof key === "number" ? key : p[key])));
     g.stroke(); g.setLineDash([]);
   };
-  if (last) line(last.setpoint, cssVar("--muted"), [4, 4]);
+  if (target !== null) line(target, cssVar("--muted"), [4, 4]);
   line("tout", cssVar("--warm"));
   line("tin", cssVar("--cool"));
 }
 window.addEventListener("resize", drawChart);
-setTimeout(() => { if (!last) $("offline").classList.remove("hidden"); }, 3000);
 
-connect(brokerUrl);
+poll();
+setInterval(poll, 1000);
 </script>
 </body>
 </html>

@@ -1,28 +1,29 @@
 {
-  // Terminal > Run Task... > "CoolAir: start everything"
+  // Terminal > Run Task... > "CoolAir: start everything" (server + USB bridge), or each one on its own
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "CoolAir: broker",
-      "type": "shell",
-      "command": "docker compose up -d",
-      "options": { "cwd": "${workspaceFolder}/coolair" },
-      "presentation": { "reveal": "silent", "panel": "shared" }
+      "label": "CoolAir: start everything",
+      "dependsOn": ["CoolAir: start", "CoolAir: bridge"],
+      "problemMatcher": []
     },
     {
-      "label": "CoolAir: simulator",
+      "label": "CoolAir: bridge",
       "type": "shell",
-      "command": "npm start",
+      "command": "npm run bridge",
       "options": { "cwd": "${workspaceFolder}/coolair" },
       "isBackground": true,
       "problemMatcher": [],
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
-      "label": "CoolAir: start everything",
-      "dependsOn": ["CoolAir: broker", "CoolAir: simulator"],
-      "dependsOrder": "sequence",
-      "problemMatcher": []
+      "label": "CoolAir: start",
+      "type": "shell",
+      "command": "npm start",
+      "options": { "cwd": "${workspaceFolder}/coolair" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
     }
   ]
 }
